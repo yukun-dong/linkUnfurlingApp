@@ -1,6 +1,6 @@
 import config from "./config";
 import { MessageExtension } from "../sdk/messageExtension";
-import { DevLinkUnfurlingHandler, MainLinkUnfurlingHandler } from "../myLinkUnfurlingHandler";
+import { DevLinkUnfurlingHandler, MainLinkUnfurlingHandler, ZeroLinkUnfurlingHandler } from "../myLinkUnfurlingHandler";
 
 
 export const linkUnfurlingApp = new MessageExtension({
@@ -11,6 +11,7 @@ export const linkUnfurlingApp = new MessageExtension({
   },
   linkUnfurling: {
     enabled: true,
-    links: [new MainLinkUnfurlingHandler(), new DevLinkUnfurlingHandler()]
+    links: [new MainLinkUnfurlingHandler(), new DevLinkUnfurlingHandler()],
+    zeroInstallLinks:[new ZeroLinkUnfurlingHandler()]
   }
 })

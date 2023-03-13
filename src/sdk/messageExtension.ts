@@ -70,6 +70,7 @@ export class MessageExtension {
 export class LinkUnfurling {
     private readonly adapter: CloudAdapter;
     private readonly middleware: LinkUnfurlingMiddleware;
+    private readonly zeroInstallMiddleware: ZeroInstallLinkUnfurlingMiddleware;
 
     constructor(
         adapter: CloudAdapter,
@@ -79,7 +80,9 @@ export class LinkUnfurling {
         this.middleware = new LinkUnfurlingMiddleware(
             options?.links,
         );
+        this.zeroInstallMiddleware = new ZeroInstallLinkUnfurlingMiddleware(options?.zeroInstallLinks);
         this.adapter = adapter.use(this.middleware);
+        this.adapter = adapter.use(this.zeroInstallMiddleware);
     }
 
     /**
@@ -115,14 +118,43 @@ export interface MessageExtensionOptions {
     linkUnfurling?: LinkUnfurlingOptions & {
         enabled?: boolean;
     };
+
+    zeroInstallLinkUnfurling?: ZeroInstallLinkUnfurlingOptions & {
+        enabled?: boolean
+    }
 }
 
 export interface LinkUnfurlingOptions {
     links?: TeamsFxLinkUnfurlingHandler[];
+    zeroInstallLinks?: TeamsFxZeroInstallLinkUnfurlingHandler[];
+
+}
+export interface ZeroInstallLinkUnfurlingOptions {
+    links?: TeamsFxZeroInstallLinkUnfurlingHandler[];
 
 }
 
 export interface TeamsFxLinkUnfurlingHandler {
+    /**
+     * The string or regular expression patterns that can trigger this handler.
+     */
+    triggerLinks: TriggerLinks;
+
+    /**
+     * Handles a bot command received activity.
+     *
+     * @param context The bot context.
+     * @param message The command message the user types from Teams.
+     * @returns A `Promise` representing an activity or text to send as the command response.
+     * Or no return value if developers want to send the response activity by themselves in this method.
+     */
+    handleLinkReceived(
+        context: TurnContext,
+        link: Link
+    ): Promise<any>;
+}
+
+export interface TeamsFxZeroInstallLinkUnfurlingHandler {
     /**
      * The string or regular expression patterns that can trigger this handler.
      */
@@ -161,6 +193,97 @@ export class LinkUnfurlingMiddleware implements Middleware {
 
     public async onTurn(context: TurnContext, next: () => Promise<void>): Promise<void> {
         if (context.activity.name === 'composeExtension/queryLink') {
+            // Invoke corresponding command handler for the command response
+
+            const url = context.activity.value.url;
+            let alreadyProcessed = false;
+
+            for (const handler of this.linkUnfurlingHandlers) {
+                const matchResult = this.shouldTrigger(handler.triggerLinks, url);
+
+                // It is important to note that the command bot will stop processing handlers
+                // when the first command handler is matched.
+                if (!!matchResult) {
+                    const message: Link = {
+                        link: url,
+                    };
+                    message.matches = Array.isArray(matchResult) ? matchResult : void 0;
+                    const response = await handler.handleLinkReceived(context, message);
+                    await context.sendActivity({ type: "invokeResponse", value: { status: 200, body: response } })
+                    // await this.processResponse(context, response);
+                    alreadyProcessed = true;
+                    break;
+                }
+            }
+
+        }
+        await next();
+    }
+
+    private async processResponse(context: TurnContext, response: string | void | Partial<Activity>) {
+        if (typeof response === "string") {
+            await context.sendActivity(response);
+        } else {
+            const replyActivity = response as Partial<Activity>;
+            if (replyActivity) {
+                await context.sendActivity(replyActivity);
+            }
+        }
+    }
+
+    private matchPattern(pattern: string | RegExp, text: string): boolean | RegExpMatchArray {
+        if (text) {
+            if (typeof pattern === "string") {
+                const regExp = new RegExp(pattern as string, "i");
+                return regExp.test(text);
+            }
+
+            if (pattern instanceof RegExp) {
+                const matches = text.match(pattern as RegExp);
+                return matches ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    private shouldTrigger(patterns: TriggerLinks, text: string): RegExpMatchArray | boolean {
+        const expressions = Array.isArray(patterns) ? patterns : [patterns];
+
+        for (const ex of expressions) {
+            const arg = this.matchPattern(ex, text);
+            if (arg) return arg;
+        }
+
+        return false;
+    }
+
+    private getActivityText(activity: Activity): string {
+        let text = activity.text;
+        const removedMentionText = TurnContext.removeRecipientMention(activity);
+        if (removedMentionText) {
+            text = removedMentionText
+                .toLowerCase()
+                .replace(/\n|\r\n/g, "")
+                .trim();
+        }
+
+        return text;
+    }
+}
+
+export class ZeroInstallLinkUnfurlingMiddleware implements Middleware {
+    public readonly linkUnfurlingHandlers: TeamsFxZeroInstallLinkUnfurlingHandler[] = [];
+    constructor(
+        handlers?: TeamsFxZeroInstallLinkUnfurlingHandler[],
+    ) {
+        handlers = handlers ?? [];
+        this.linkUnfurlingHandlers.push(...handlers);
+    }
+
+
+    public async onTurn(context: TurnContext, next: () => Promise<void>): Promise<void> {
+        if (context.activity.name === 'composeExtension/anonymousQueryLink') {
             // Invoke corresponding command handler for the command response
 
             const url = context.activity.value.url;
